@@ -3,12 +3,12 @@ import numpy as np
 from scipy.stats import norm
 from scipy.special import owens_t
 from scipy.optimize import minimize
-import time, matplotlib
 import matplotlib.pyplot as plt
+import time
 
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Arial']
-plt.rcParams.update({'font.size': 11})
+plt.rcParams.update({'font.size': 12})
 
 # Author: James Whiteley (github.com/jamesalexwhiteley)
 
@@ -16,8 +16,8 @@ nodes = np.array([[-1, 1], [-1, 0], [-1, -1]])  # free node at origin
 L = np.linalg.norm(nodes, axis=1)
 n = -nodes / L[:, None]  # unit vectors from support -> free node 
 
-# ---------- exact bivariate normal P(Z1<=h, Z2<=k; r), deterministic ----------
-# can be checked against scipy.stats.multivariate_normal.cdf
+# ---------- exact bivariate normal P(Z1<=h, Z2<=k; r); deterministic ----------
+# via Claude; can be checked against scipy.stats.multivariate_normal.cdf
 def bvn_le(h, k, r):
     if abs(r) < 1e-12: return norm.cdf(h) * norm.cdf(k)  # independent 
     s = np.sqrt(1 - r * r)
@@ -31,7 +31,7 @@ def bvn_le(h, k, r):
     c = .5 if h * k < 0 else 0.
     return .5 * (norm.cdf(h) + norm.cdf(k)) - owens_t(h, ah) - owens_t(k, ak) - c  # owen's identity 
 
-# ---------- Ditlevsen (1979) bounds, eqs. (8) & (10) ----
+# ---------- Ditlevsen (1979) bounds ----
 def pf_bounds(b, rho):
     idx = np.argsort(b)  # most critical mode first
     b = b[idx]; rho = rho[np.ix_(idx, idx)]
@@ -123,23 +123,23 @@ if __name__ == '__main__':
     print("elastic:", out['elastic'][0], out['elastic'][-1], ve1)
     print("plastic:", out['plastic'][0], out['plastic'][-1], vp1)
 
-    # normalise by the largest optimum (elastic limit as gamma -> 1)
+    # normalise by the largest optimum 
     vmax = max(max(out['elastic']), max(out['plastic']), ve1, vp1)
     ven = np.array(out['elastic']) / vmax; vpn = np.array(out['plastic']) / vmax
     ve1n, vp1n = ve1 / vmax, vp1 / vmax
     print(f"normalisation V*_max = {vmax:.6f}")
 
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(gs, ven, '-', color='tab:red',
-            label=r'elastic (elements), $\gamma<1$')
-    ax.plot(1, ve1n, 'o', color='tab:red')
-    ax.plot([gs[-1], 1], [ven[-1], ve1n], '--', color='tab:red', lw=.8)
-    ax.plot(gs, vpn, 'k-', label='plastic (mechanisms)')
+    ax.plot(gs, ven, '-', color='tab:blue',
+            label=r'elastic (element-level), $\gamma<1$')
+    ax.plot(1, ve1n, 'o', color='tab:blue')
+    ax.plot([gs[-1], 1], [ven[-1], ve1n], '--', color='tab:blue', lw=.8)
+    ax.plot(gs, vpn, 'k-', label='plastic (system-level)')
     ax.plot(1, vp1n, 'ko', ms=4)
     ax.set_ylim(0, 1.05)
     ax.set_xlabel(r'Damage $\gamma$')
-    ax.set_ylabel(r'Optimum volume $V/V_{\max}$')
-    ax.set_title(r'System-reliability constrained ($\beta_{sys}\geq 3$)')
+    ax.set_ylabel(r'Optimum volume $V^*/V^*_{\max}$')
+    # ax.set_title(r'System-reliability constrained ($\beta_{sys}\geq 3$)')
     ax.legend(); ax.grid(alpha=.3); plt.tight_layout()
+    plt.savefig('pfvol_gamma.png', dpi=400)
     plt.show()
-    plt.savefig('pfvol_gamma.png', dpi=150)
