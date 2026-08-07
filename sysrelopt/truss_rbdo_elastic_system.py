@@ -1,3 +1,4 @@
+#type:ignore 
 """Elastic system-level definition."""
 import numpy as np, time
 import matplotlib.pyplot as plt
@@ -22,7 +23,7 @@ def elastic_q(a1, a2, gamma):
     K = sum(ki*np.outer(ni,ni) for ki,ni in zip(k, NV))
     return np.abs(k * (NV @ np.linalg.solve(K, [0,-1.])))
 
-def pf_relaxed(a1, a2, gamma, cY=.1, cF=.1):
+def pf_relaxed(a1, a2, gamma, cY=.1, cF=.1):  # NOTE ELASTIC-SYSTEM cY, cF
     f = 1 + cF*SQ2*GH_X  # Gauss-Hermite nodes, F ~ N(1, cF^2)
     tB = QP / np.array([a2, a1])  # B_j = {Y_j <= tB_j f}, bars 2,3
     pB = norm.cdf((np.outer(f, tB) - 1)/cY)
@@ -70,30 +71,51 @@ def opt_rel(gamma, x0s, bt=3.0):
 if __name__ == '__main__':
     
     gs = np.concatenate([np.linspace(0,.95,25), np.linspace(.96,.9999,12)])
-    t = time.time(); curves = {}
+    t = time.time(); curves = {}; areas = {}
     for name, comps in [('elastic', comps_e), ('plastic', comps_p)]:
-        xp=[3.,3.]; vs=[]
+        xp=[3.,3.]; vs=[]; xs=[]
         for g in gs:
-            r=opt_base(comps,g,x0s=[xp,[1.,1.],[5.,5.]]); xp=r.x; vs.append(r.fun)
-        curves[name]=np.array(vs)
-    xp=[3.,3.]; vs=[]
+            r=opt_base(comps,g,x0s=[xp,[1.,1.],[5.,5.]]); xp=r.x
+            vs.append(r.fun); xs.append(r.x)
+        curves[name]=np.array(vs); areas[name]=np.array(xs)
+    xp=[3.,3.]; vs=[]; xs=[]
     for g in gs:
-        r=opt_rel(g,[xp,[1.,1.],[5.,5.]]); xp=r.x; vs.append(r.fun)
-    curves['relaxed']=np.array(vs)
-    ve1 = opt_base(comps_e, 1.0).fun
-    vr1 = opt_rel(1.0, [[2.5,1.5],[1.,1.],[5.,5.]]).fun
+        r=opt_rel(g,[xp,[1.,1.],[5.,5.]]); xp=r.x
+        vs.append(r.fun); xs.append(r.x)
+    curves['relaxed']=np.array(vs); areas['relaxed']=np.array(xs)
+    r = opt_base(comps_e, 1.0);                        ve1, xe1 = r.fun, r.x
+    r = opt_rel(1.0, [[2.5,1.5],[1.,1.],[5.,5.]]);     vr1, xr1 = r.fun, r.x
+    ae, ap, ar = areas['elastic'], areas['plastic'], areas['relaxed']
     print(f"sweeps: {time.time()-t:.1f} s")
     print("elastic  :", curves['elastic'][0], curves['elastic'][-1], ve1)
     print("relaxed  :", curves['relaxed'][0], curves['relaxed'][-1], vr1)
     print("plastic  :", curves['plastic'][0], curves['plastic'][-1])
 
+    for idx, lab, fname in [(0, r'Optimum area $a_1^*$', 'pfarea1_gamma_elastic_system.png'),
+                            (1, r'Optimum area $a_2^*$', 'pfarea2_gamma_elastic_system.png')]:
+        fig, ax = plt.subplots(figsize=(6.5, 4.5))
+        ax.plot(gs, ae[:, idx], '-.', color='tab:blue',
+                label=r'elastic (element-level), $\gamma<1$')
+        ax.plot(1, xe1[idx], 'o', color='tab:blue', label=r'elastic, $\gamma=1$')
+        ax.plot([gs[-1], 1], [ae[-1, idx], xe1[idx]], '--', color='tab:blue', lw=.5)
+        ax.plot(gs, ar[:, idx], ':', color='tab:blue', lw=2,
+                label='elastic (system-level)')
+        ax.plot(1, xr1[idx], 's', color='tab:blue', ms=4)
+        ax.plot(gs, ap[:, idx], 'k-', label='plastic (system-level)')
+        ax.set_ylim(0, None)
+        ax.set_xlabel(r'Damage $\gamma$')
+        ax.set_ylabel(lab)
+        ax.legend(); ax.grid(alpha=.3); plt.tight_layout()
+        plt.savefig(fname, dpi=400)
+        plt.close(fig)
+
     vmax = max(curves['elastic'].max(), ve1)
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(gs, curves['elastic']/vmax, '-', color='tab:blue',
+    ax.plot(gs, curves['elastic']/vmax, '-.', color='tab:blue',
             label=r'elastic (element-level), $\gamma<1$')
-    ax.plot(1, ve1/vmax, 'o', color='tab:blue')
+    ax.plot(1, ve1/vmax, 'o', color='tab:blue', label=r'elastic, $\gamma=1$')
     ax.plot([gs[-1],1], [curves['elastic'][-1]/vmax, ve1/vmax], '--',
-            color='tab:blue', lw=.8)
+            color='tab:blue', lw=.5)
     ax.plot(gs, curves['relaxed']/vmax, ':', color='tab:blue', lw=2,
             label='elastic (system-level)')
     ax.plot(1, vr1/vmax, 's', color='tab:blue', ms=4)

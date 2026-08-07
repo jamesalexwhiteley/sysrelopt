@@ -1,3 +1,4 @@
+#type:ignore 
 """Gradient-based RBDO using Ditlevsen bounds."""
 import numpy as np
 from scipy.stats import norm
@@ -47,10 +48,13 @@ def pf_bounds(b, rho):
     return lo, hi
 
 # ---------- component-level (beta_i, rho_ij) ----------
-def comps_e(a3, gv, cY=.1, cF=.1):          # elastic, first yield
-    a3 = np.maximum(a3, 1e-6); k = a3 * (1 - gv) / L  # k = EA/L with E=1 
+def elastic_q(a3, gv):
+    a3 = np.maximum(a3, 1e-6); k = a3 * (1 - gv) / L        # k = EA/L with E=1
     K = sum(ki * np.outer(ni, ni) for ki, ni in zip(k, n))  # 2x2 stiffness matrix K 
-    q = np.abs(k * (n @ np.linalg.solve(K, [0, -1.])))  # f = [0, −1]; q = k*e (stiffness x elongation)
+    return np.abs(k * (n @ np.linalg.solve(K, [0, -1.])))   # f = [0, −1]; q = k*e (stiffness x elongation)
+
+def comps_e(a3, gv, cY=.1, cF=.1):          # elastic, first yield NOTE ELASTIC cY, cF
+    a3 = np.maximum(a3, 1e-6); q = elastic_q(a3, gv)
     R = (1 - gv) * a3; live = np.where(R > 1e-12)[0]
     b, al = [], []  
     # elastic margins M_i = R_i*Y_i − q_i*F
@@ -74,7 +78,7 @@ C_PL = np.array([[np.sqrt(2), 1.0, 0.0],
                  [0.0, 1.0, np.sqrt(2)],
                  [1/np.sqrt(2), 0.0, 1/np.sqrt(2)]])
 
-def comps_p(a3, gv, cY=.1, cF=.1):
+def comps_p(a3, gv, cY=.1, cF=.1):  # NOTE PLASTIC cY, cF
     R = (1 - gv) * np.maximum(a3, 1e-6)
     b, al = [], []
     for j in range(3):  # one mechanism per row of C_PL
@@ -110,36 +114,60 @@ def opt(comps, gamma, x0s=([3., 3.], [1., 1.], [5., 5.]), bt=3.0):
     return best
 
 if __name__ == '__main__':
-    gs = np.concatenate([np.linspace(0, .95, 25), np.linspace(.96, .9999, 12)])
-    t = time.time(); out = {}
-    for name, comps in [('elastic', comps_e), ('plastic', comps_p)]:
-        xp = [3., 3.]; vs = []
-        for g in gs:
-            r = opt(comps, g, x0s=[xp, [1., 1.], [5., 5.]])
-            xp = r.x; vs.append(r.fun)
-        out[name] = vs
-    ve1 = opt(comps_e, 1.0).fun; vp1 = opt(comps_p, 1.0).fun
-    print(f"sweep: {time.time()-t:.1f} s")
-    print("elastic:", out['elastic'][0], out['elastic'][-1], ve1)
-    print("plastic:", out['plastic'][0], out['plastic'][-1], vp1)
+    # investigate gamma=0
+    # elastic case 
+    r = opt(comps_e, 0.0)
+    a = np.array([r.x[0], r.x[1], r.x[0]]); gv = np.zeros(3)
+    q = elastic_q(a, gv); R = (1 - gv) * a
+    print(f"V* = {r.fun:.6f}")
+    print(f"areas  a = {np.array2string(a, precision=4)}")
+    print(f"forces q = {np.array2string(q, precision=4)}")
+    print(f"util q/R = {np.array2string(q / R, precision=4)}")
+    # plastic case
+    r = opt(comps_p, 0.0)
+    a = np.array([r.x[0], r.x[1], r.x[0]]); gv = np.zeros(3)
+    b, rho = comps_p(a, gv)
+    names = ['{1,2}', '{2,3}', '{1,3}']
+    print(f"V* = {r.fun:.6f}   areas a = {np.array2string(a, precision=4)}")
+    for nm, bj in zip(names, b):
+        print(f"  mechanism {nm}: beta = {bj:.4f}")
+    print(f"  beta_sys = {beta_sys(comps_p, a, gv):.4f}")
+    R = (1 - gv) * a
+    cap = C_PL @ R  # mean capacity work per mechanism, load work = 1
+    for nm, cj, bj in zip(names, cap, b):
+        print(f"  mechanism {nm}: E[M] = {cj - 1:+.4f}  (capacity {cj:.4f} vs load 1)  beta = {bj:.4f}")
 
-    # normalise by the largest optimum 
-    vmax = max(max(out['elastic']), max(out['plastic']), ve1, vp1)
-    ven = np.array(out['elastic']) / vmax; vpn = np.array(out['plastic']) / vmax
-    ve1n, vp1n = ve1 / vmax, vp1 / vmax
-    print(f"normalisation V*_max = {vmax:.6f}")
+    # # plot graphs gamma [0, 1]
+    # gs = np.concatenate([np.linspace(0, .95, 25), np.linspace(.96, .9999, 12)])
+    # t = time.time(); out = {}
+    # for name, comps in [('elastic', comps_e), ('plastic', comps_p)]:
+    #     xp = [3., 3.]; vs = []
+    #     for g in gs:
+    #         r = opt(comps, g, x0s=[xp, [1., 1.], [5., 5.]])
+    #         xp = r.x; vs.append(r.fun)
+    #     out[name] = vs
+    # ve1 = opt(comps_e, 1.0).fun; vp1 = opt(comps_p, 1.0).fun
+    # print(f"sweep: {time.time()-t:.1f} s")
+    # print("elastic:", out['elastic'][0], out['elastic'][-1], ve1)
+    # print("plastic:", out['plastic'][0], out['plastic'][-1], vp1)
 
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(gs, ven, '-', color='tab:blue',
-            label=r'elastic (element-level), $\gamma<1$')
-    ax.plot(1, ve1n, 'o', color='tab:blue')
-    ax.plot([gs[-1], 1], [ven[-1], ve1n], '--', color='tab:blue', lw=.8)
-    ax.plot(gs, vpn, 'k-', label='plastic (system-level)')
-    ax.plot(1, vp1n, 'ko', ms=4)
-    ax.set_ylim(0, 1.05)
-    ax.set_xlabel(r'Damage $\gamma$')
-    ax.set_ylabel(r'Optimum volume $V^*/V^*_{\max}$')
-    # ax.set_title(r'System-reliability constrained ($\beta_{sys}\geq 3$)')
-    ax.legend(); ax.grid(alpha=.3); plt.tight_layout()
-    plt.savefig('pfvol_gamma.png', dpi=400)
-    plt.show()
+    # # normalise by the largest optimum 
+    # vmax = max(max(out['elastic']), max(out['plastic']), ve1, vp1)
+    # ven = np.array(out['elastic']) / vmax; vpn = np.array(out['plastic']) / vmax
+    # ve1n, vp1n = ve1 / vmax, vp1 / vmax
+    # print(f"normalisation V*_max = {vmax:.6f}")
+
+    # fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    # ax.plot(gs, ven, '-.', color='tab:blue',
+    #         label=r'elastic (element-level), $\gamma<1$')
+    # ax.plot(1, ve1n, 'o', color='tab:blue', label=r'elastic (element-level), $\gamma=1$')
+    # ax.plot([gs[-1], 1], [ven[-1], ve1n], '--', color='tab:blue', lw=.8)
+    # ax.plot(gs, vpn, 'k-', label='plastic (system-level)')
+    # # ax.plot(1, vp1n, 'ko', ms=4)  
+    # ax.set_ylim(0, 1.05)
+    # ax.set_xlabel(r'Damage $\gamma$')
+    # ax.set_ylabel(r'Optimum volume $V^*/V^*_{\max}$')
+    # # ax.set_title(r'System-reliability constrained ($\beta_{sys}\geq 3$)')
+    # ax.legend(); ax.grid(alpha=.3); plt.tight_layout()
+    # plt.savefig('pfvol_gamma.png', dpi=400)
+    # plt.show()
