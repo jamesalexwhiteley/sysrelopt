@@ -23,7 +23,7 @@ def elastic_q(a1, a2, gamma):
     K = sum(ki*np.outer(ni,ni) for ki,ni in zip(k, NV))
     return np.abs(k * (NV @ np.linalg.solve(K, [0,-1.])))
 
-def pf_relaxed(a1, a2, gamma, cY=.1, cF=.1):  # NOTE ELASTIC-SYSTEM cY, cF
+def pf_relaxed(a1, a2, gamma, cY=.1, cF=.1): 
     f = 1 + cF*SQ2*GH_X  # Gauss-Hermite nodes, F ~ N(1, cF^2)
     tB = QP / np.array([a2, a1])  # B_j = {Y_j <= tB_j f}, bars 2,3
     pB = norm.cdf((np.outer(f, tB) - 1)/cY)
