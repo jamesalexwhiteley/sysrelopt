@@ -1,12 +1,13 @@
 #type:ignore
 """Gradient-based RBDO of a rigid-plastic model (via Genz's algorithm)."""
 import numpy as np
-from scipy.stats import qmc
+from scipy.stats import qmc, norm
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import torch
 from torch.special import ndtr, ndtri
 import time
+from truss_rbdo_bounds import comps_p as comps_p_np, pf_bounds, bvn_le
 
 torch.set_default_dtype(torch.float64)  # tail probabilities need float64
 
@@ -18,17 +19,20 @@ plt.rcParams.update({'font.size': 12})
 
 # ---------- multinormal survival pf = 1 - Phi_m(b; rho) ----------
 _PTS = {}
-def sobol_pts(d, n_log2):
-    key = (d, n_log2)
+def sobol_pts(d, n_log2, seed=None):
+    key = (d, n_log2, seed)
     if key not in _PTS:
-        _PTS[key] = torch.tensor(qmc.Sobol(d, scramble=False).random_base2(n_log2))
+        _PTS[key] = torch.tensor(qmc.Sobol(d, scramble=seed is not None,
+                                           seed=seed).random_base2(n_log2))
     return _PTS[key]
 
-def genz_sf(b, rho, n_log2=16):
-    """pf = 1 - Phi_m(b; rho)."""
+def genz_sf(b, rho, n_log2=16, seeds=(None,)):
+    return sum(_genz_once(b, rho, n_log2, s) for s in seeds) / len(seeds)
+
+def _genz_once(b, rho, n_log2, seed):  
     m = len(b)
     C = torch.linalg.cholesky(rho)
-    w = sobol_pts(m - 1, n_log2); N = len(w)
+    w = sobol_pts(m - 1, n_log2, seed); N = len(w)
     z = b[0] / C[0, 0]
     e = [ndtr(z).expand(N)]; s = [ndtr(-z).expand(N)]
     y = []
@@ -67,23 +71,23 @@ def comps_p(a3, gv, cY=.1, cF=.1):
 
 # ---------- system beta: multinormal integral + autodiff ----------
 # safe = all margins > 0 = {W <= beta}, W ~ N(0, rho), so pf = 1 - Phi_m
-def beta_sys_torch(a3, gv):
-    b, rho = comps_p(a3, gv)
+def beta_sys_torch(a3, gv, cY=.1, cF=.1):
+    b, rho = comps_p(a3, gv, cY, cF)
     pf = genz_sf(b, rho)
     pc = torch.clamp(pf, 1e-300, 1 - 1e-16)
     bsys = -ndtri(pc)
     # pf >= max_i Phi(-b_i) exactly, so bsys <= min b_i; vs quad error
     return torch.minimum(bsys, b.min())
 
-def beta_sys_grad(a3, gv):
+def beta_sys_grad(a3, gv, cY=.1, cF=.1):
     """Reverse-mode autodiff of a -> (beta, rho) -> pf -> beta_sys."""
     a = torch.tensor(np.asarray(a3, float), requires_grad=True)
-    bs = beta_sys_torch(a, torch.tensor(np.asarray(gv, float)))
+    bs = beta_sys_torch(a, torch.tensor(np.asarray(gv, float)), cY, cF)
     g, = torch.autograd.grad(bs, a)
     return bs.item(), g.numpy()
 
 # ---------- gradient-based RBDO with multi-start -------
-def opt(gamma, x0s=([3., 3.], [1., 1.], [5., 5.]), bt=3.0):
+def opt(gamma, x0s=([3., 3.], [1., 1.], [5., 5.]), bt=3.0, cY=.1, cF=.1, ub=6.):
     gv = np.array([gamma, 0, 0])
     V = lambda x: 2 * np.sqrt(2) * x[0] + x[1]
     dV = lambda x: np.array([2 * np.sqrt(2), 1.])
@@ -92,39 +96,115 @@ def opt(gamma, x0s=([3., 3.], [1., 1.], [5., 5.]), bt=3.0):
         def ev(x):  # one evaluation, both fun and jac
             key = np.asarray(x, float).tobytes()
             if key not in cache:
-                bs, da = beta_sys_grad(np.array([x[0], x[1], x[0]]), g)
+                bs, da = beta_sys_grad(np.array([x[0], x[1], x[0]]), g, cY, cF)
                 cache[key] = (bs - bt, np.array([da[0] + da[2], da[1]]))  # a=(x0,x1,x0)
             return cache[key]
         return {'type': 'ineq', 'fun': lambda x: ev(x)[0], 'jac': lambda x: ev(x)[1]}, ev
     (c0, ev0), (c1, ev1) = make_con(np.zeros(3)), make_con(gv)
     best = None
     for x0 in x0s:
-        r = minimize(V, x0, jac=dV, method='SLSQP', bounds=[(1e-3, 6.)] * 2,
+        r = minimize(V, x0, jac=dV, method='SLSQP', bounds=[(1e-3, ub)] * 2,
                      constraints=[c0, c1], options={'ftol': 1e-12, 'maxiter': 300})
         if min(ev0(r.x)[0], ev1(r.x)[0]) > -1e-6 \
            and (best is None or r.fun < best.fun):
             best = r
     return best
 
-# ---------- finite-difference check of the autodiff gradient ----------
-def check_grads(eps=1e-6):
-    rng = np.random.default_rng(0)
-    err = 0.
-    for gamma in (0., .5, .95):
-        gv = np.array([gamma, 0, 0])
-        for _ in range(5):
-            a = rng.uniform(.5, 3., 3)
-            bs, g = beta_sys_grad(a, gv)
-            if bs > 4.5:  # deep tail: FD is unreliable, amplified by 1/phi(beta) 
-                continue  
-            fd = np.array([(beta_sys_grad(a + eps * e, gv)[0]
-                            - beta_sys_grad(a - eps * e, gv)[0]) / (2 * eps)
-                           for e in np.eye(3)])
-            err = max(err, np.abs(g - fd).max() / max(np.abs(fd).max(), 1.))
-    print(f"grad check plastic: max rel err {err:.2e}")
+# # ---------- finite-difference check of the autodiff gradient ----------
+# def check_grads(eps=1e-6):
+#     rng = np.random.default_rng(0)
+#     err = 0.
+#     for gamma in (0., .5, .95):
+#         gv = np.array([gamma, 0, 0])
+#         for _ in range(5):
+#             a = rng.uniform(.5, 3., 3)
+#             bs, g = beta_sys_grad(a, gv)
+#             if bs > 4.5:  # deep tail: FD is unreliable, amplified by 1/phi(beta) 
+#                 continue  
+#             fd = np.array([(beta_sys_grad(a + eps * e, gv)[0]
+#                             - beta_sys_grad(a - eps * e, gv)[0]) / (2 * eps)
+#                            for e in np.eye(3)])
+#             err = max(err, np.abs(g - fd).max() / max(np.abs(fd).max(), 1.))
+#     print(f"grad check plastic: max rel err {err:.2e}")
+
+# ---------- verification: pf (Ditlevsen vs Genz vs exact) and grad (autodiff vs FD) ----------
+def _tri_sf(b, rho, n=400):
+    """P(Z_1>b_1, Z_2>b_2, Z_3>b_3) by Gauss-Legendre over Z_3."""
+    r1, r2, r12 = rho[0, 2], rho[1, 2], rho[0, 1]
+    s1, s2 = np.sqrt(1 - r1**2), np.sqrt(1 - r2**2)
+    r = (r12 - r1*r2) / (s1*s2)
+    x, w = np.polynomial.legendre.leggauss(n)
+    z = .5*16*x + b[2] + 8.; w = w*8.
+    v = np.array([bvn_le(-(b[0]-r1*zi)/s1, -(b[1]-r2*zi)/s2, r) for zi in z])
+    return (w * norm.pdf(z) * v).sum()
+
+def pf_exact(b, rho):
+    """Exact pf by inclusion-exclusion (m = 3): sum P_i - sum P_ij + P_123."""
+    P1 = norm.cdf(-b).sum()
+    P2 = sum(bvn_le(-b[i], -b[j], rho[i, j]) for i in range(3) for j in range(i))
+    return P1 - P2 + _tri_sf(b, rho)
+
+def beta_sys_val(a3, gv, cY=.1, cF=.1):
+    with torch.no_grad():
+        return beta_sys_torch(torch.tensor(np.asarray(a3, float)),
+                              torch.tensor(np.asarray(gv, float)), cY, cF).item()
+
+def pf_genz_val(a3, gv, cY=.1, cF=.1, **kw):
+    with torch.no_grad():
+        b, rho = comps_p(torch.tensor(np.asarray(a3, float)),
+                         torch.tensor(np.asarray(gv, float)), cY, cF)
+        return genz_sf(b, rho, **kw).item()
+
+def fd_grad(a3, gv, cY=.1, cF=.1, eps=1e-6):
+    a3 = np.asarray(a3, float)
+    return np.array([(beta_sys_val(a3+eps*e, gv, cY, cF)
+                      - beta_sys_val(a3-eps*e, gv, cY, cF)) / (2*eps)
+                     for e in np.eye(3)])
+
+def verify(bts=(3.0, 4.5), nus=(.05, .10, .15), gamma=0., eps=1e-6):
+    gv = np.array([gamma, 0., 0.]); rows = []
+    for bt in bts:
+        for nu in nus:
+            r = opt(gamma, bt=bt, cY=nu, cF=nu, ub=12.)
+            x = r.x; a = np.array([x[0], x[1], x[0]])
+            b, rho = comps_p_np(a, gv, cY=nu, cF=nu)
+            lo, hi = pf_bounds(b, rho)
+            ex = pf_exact(b, rho)
+            gz = pf_genz_val(a, gv, nu, nu)
+            gs = pf_genz_val(a, gv, nu, nu, seeds=(0, 1, 2, 3))
+            _, g_ad = beta_sys_grad(a, gv, nu, nu)
+            g_fd = fd_grad(a, gv, nu, nu, eps)
+            rows.append(dict(bt=bt, nu=nu, a1=x[0], a2=x[1], V=r.fun, lo=lo, hi=hi,
+                             ex=ex, gz=gz, gs=gs, g_ad=g_ad, g_fd=g_fd,
+                             err=np.abs(g_ad-g_fd).max()/max(np.abs(g_fd).max(), 1e-30)))
+    return rows
+
+def report(rows):
+    h = (f"{'nu':>5}{'beta_t':>8}{'a1*':>8}{'a2*':>8}{'V*':>8}{'pf_lo':>12}{'pf_hi':>12}"
+         f"{'pf_exact':>12}{'in?':>5}{'Genz_unscr':>12}{'err%':>8}{'Genz_scr':>12}{'err%':>8}")
+    print('\nFailure probability: Ditlevsen bounds, Genz, and exact  (plastic, gamma = 0)')
+    print(h); print('-'*len(h))
+    for r in rows:
+        ok = r['lo']*(1-1e-12) <= r['ex'] <= r['hi']*(1+1e-12)
+        print(f"{r['nu']:>5.2f}{r['bt']:>8.1f}{r['a1']:>8.4f}{r['a2']:>8.4f}{r['V']:>8.4f}"
+              f"{r['lo']:>12.4e}{r['hi']:>12.4e}{r['ex']:>12.4e}{'y' if ok else 'N':>5}"
+              f"{r['gz']:>12.4e}{100*(r['gz']/r['ex']-1):>+8.2f}"
+              f"{r['gs']:>12.4e}{100*(r['gs']/r['ex']-1):>+8.2f}")
+    h = (f"{'nu':>5}{'beta_t':>8}{'db/da1 AD':>12}{'FD':>12}{'db/da2 AD':>12}{'FD':>12}"
+         f"{'db/da3 AD':>12}{'FD':>12}{'max rel err':>13}")
+    print('\nGradient of beta_sys: torch autodiff vs central finite difference')
+    print(h); print('-'*len(h))
+    for r in rows:
+        ad, fd = r['g_ad'], r['g_fd']
+        print(f"{r['nu']:>5.2f}{r['bt']:>8.1f}"
+              + ''.join(f"{ad[i]:>12.6f}{fd[i]:>12.6f}" for i in range(3))
+              + f"{r['err']:>13.2e}")
 
 if __name__ == '__main__':
-    check_grads()
+    # sensitivity table
+    report(verify())
+
+    # check_grads()
     # plot graph gamma [0, 1]
     gs = np.concatenate([np.linspace(0, .95, 25), np.linspace(.96, .9999, 12)])
     t = time.time()
@@ -146,3 +226,5 @@ if __name__ == '__main__':
     ax.legend(); ax.grid(alpha=.3); plt.tight_layout()
     # plt.savefig('pfvol_gamma_plastic_genz.png', dpi=400)
     plt.show()
+
+    
