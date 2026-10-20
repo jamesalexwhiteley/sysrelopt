@@ -197,21 +197,23 @@ if __name__ == '__main__':
     print(f"total: {time.time()-t0:.1f} s")
 
     # ---- plot ----
+    vmax = max(curves['elastic'].max(), ends['elastic'].fun)
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(gs, curves['elastic'], '-.', color='tab:blue', 
+    ax.plot(gs, curves['elastic']/vmax, '-.', color='tab:blue',
             label=r'elastic (element-level), $\gamma<1$')
-    ax.plot([gs[-1], 1], [curves['elastic'][-1], ends['elastic'].fun], '--',
-            color='tab:blue', lw=.5)
-    ax.plot(gs, curves['relaxed'], ':', color='tab:blue', lw=2,
+    ax.plot(1, ends['elastic'].fun/vmax, 'o', color='tab:blue', clip_on=False, zorder=3,
+            label=r'elastic, $\gamma=1$')
+    ax.plot(gs, curves['relaxed']/vmax, ':', color='tab:blue', lw=2,
             label='elastic (system-level)')
-    ax.plot([gs[-1], 1], [curves['relaxed'][-1], ends['relaxed'].fun], ':',
+    ax.plot([gs[-1], 1], [curves['relaxed'][-1]/vmax, ends['relaxed'].fun/vmax], ':',
             color='tab:blue', lw=2)
-    ax.plot(gs, curves['plastic'], 'k-', label='plastic (system-level)')
-    ax.plot([gs[-1], 1], [curves['plastic'][-1], ends['plastic'].fun], 'k-')
+    ax.plot(gs, curves['plastic']/vmax, 'k-', label='plastic (system-level)')
+    ax.plot([gs[-1], 1], [curves['plastic'][-1]/vmax, ends['plastic'].fun/vmax], 'k-')
     lab = r'Genz ($%d \times 2^{%d}$ points)' % (R_OPT, K_OPT)
     for kind, mk in [('elastic', 's'), ('relaxed', 's'), ('plastic', 's')]:
-        ax.plot(gchk, marks[kind], mk, mfc='none', mec='0.3', ms=6, ls='none',
-                label=lab if kind == 'elastic' else None)
+        ax.plot(gchk, marks[kind]/vmax, mk, mfc='none', mec='0.3', ms=6, ls='none',
+                clip_on=False, label=lab if kind == 'elastic' else None)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.margins(0)
     ax.set_xlabel(r'Damage $\gamma$')
     ax.set_ylabel(r'Optimum volume $V^*/V^*_{\max}$')
     ax.legend(); ax.grid(alpha=.3); plt.tight_layout()

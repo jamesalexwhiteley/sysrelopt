@@ -71,7 +71,7 @@ def comps_p(a3, gv, cY=.1, cF=.1):
 
 # ---------- system beta: multinormal integral + autodiff ----------
 # safe = all margins > 0 = {W <= beta}, W ~ N(0, rho), so pf = 1 - Phi_m
-def beta_sys_torch(a3, gv, cY=.1, cF=.1):
+def beta_sys_torch(a3, gv, cY=.2, cF=.0):
     b, rho = comps_p(a3, gv, cY, cF)
     pf = genz_sf(b, rho)
     pc = torch.clamp(pf, 1e-300, 1 - 1e-16)

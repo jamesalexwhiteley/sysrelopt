@@ -91,18 +91,23 @@ if __name__ == '__main__':
     print("relaxed  :", curves['relaxed'][0], curves['relaxed'][-1], vr1)
     print("plastic  :", curves['plastic'][0], curves['plastic'][-1])
 
+    from matplotlib.ticker import MaxNLocator
+    amax = max(ae.max(), ar.max(), ap.max(), np.max(xe1), np.max(xr1))
+    aticks = MaxNLocator(nbins=6, steps=[1, 2, 2.5, 5, 10]).tick_values(0, amax)
+
     for idx, lab, fname in [(0, r'Optimum area $a_1^*$', 'pfarea1_gamma_elastic_system.png'),
                             (1, r'Optimum area $a_2^*$', 'pfarea2_gamma_elastic_system.png')]:
         fig, ax = plt.subplots(figsize=(6.5, 4.5))
         ax.plot(gs, ae[:, idx], '-.', color='tab:blue',
                 label=r'elastic (element-level), $\gamma<1$')
-        ax.plot(1, xe1[idx], 'o', color='tab:blue', label=r'elastic, $\gamma=1$')
-        ax.plot([gs[-1], 1], [ae[-1, idx], xe1[idx]], '--', color='tab:blue', lw=.5)
+        ax.plot(1, xe1[idx], 'o', color='tab:blue', label=r'elastic, $\gamma=1$',
+                clip_on=False, zorder=3)
         ax.plot(gs, ar[:, idx], ':', color='tab:blue', lw=2,
                 label='elastic (system-level)')
-        ax.plot(1, xr1[idx], 's', color='tab:blue', ms=4)
+        ax.plot(1, xr1[idx], 's', color='tab:blue', ms=4, clip_on=False, zorder=3)
         ax.plot(gs, ap[:, idx], 'k-', label='plastic (system-level)')
-        ax.set_ylim(0, None)
+        ax.set_yticks(aticks); ax.set_ylim(0, aticks[-1])
+        ax.set_xlim(0, 1); ax.margins(0)
         ax.set_xlabel(r'Damage $\gamma$')
         ax.set_ylabel(lab)
         ax.legend(); ax.grid(alpha=.3); plt.tight_layout()
@@ -113,14 +118,14 @@ if __name__ == '__main__':
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     ax.plot(gs, curves['elastic']/vmax, '-.', color='tab:blue',
             label=r'elastic (element-level), $\gamma<1$')
-    ax.plot(1, ve1/vmax, 'o', color='tab:blue', label=r'elastic, $\gamma=1$')
-    ax.plot([gs[-1],1], [curves['elastic'][-1]/vmax, ve1/vmax], '--',
-            color='tab:blue', lw=.5)
+    ax.plot(1, ve1/vmax, 'o', color='tab:blue', label=r'elastic, $\gamma=1$',
+            clip_on=False, zorder=3)
     ax.plot(gs, curves['relaxed']/vmax, ':', color='tab:blue', lw=2,
             label='elastic (system-level)')
-    ax.plot(1, vr1/vmax, 's', color='tab:blue', ms=4)
+    ax.plot(1, vr1/vmax, 's', color='tab:blue', ms=4, clip_on=False, zorder=3)
     ax.plot(gs, curves['plastic']/vmax, 'k-', label='plastic (system-level)')
-    ax.set_ylim(0, 1.05)
+    ax.set_ylim(0, 1)
+    ax.set_xlim(0, 1); ax.margins(0)
     ax.set_xlabel(r'Damage $\gamma$')
     ax.set_ylabel(r'Optimum volume $V^*/V^*_{\max}$')
     # ax.set_title(r'$P_f$-constrained optimum vs damage ($\beta_{sys}\geq 3$)')

@@ -79,8 +79,8 @@ C_PL = np.array([[np.sqrt(2), 1.0, 0.0],
                  [1/np.sqrt(2), 0.0, 1/np.sqrt(2)]])
 
 def comps_p(a3, gv, cY=.1, cF=.1): 
-    R = (1 - gv) * np.maximum(a3, 1e-6)
-    b, al = [], []
+    R = (1 - gv) * np.maximum(a3, 1e-6) 
+    b, al = [], [] 
     for j in range(3):  # one mechanism per row of C_PL
         tj = C_PL[j] * R  # t_ji = R_i |n_i.d_j|  (scaled)
         sM = np.hypot(cY * np.linalg.norm(tj), cF)  # D[M_j]
